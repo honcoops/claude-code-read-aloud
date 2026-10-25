@@ -1,0 +1,5 @@
+{
+  "name": "honcoops-mods",
+  "owner": { "name": "honcoops" },
+  "plugins": [{ "name": "read-aloud", "source": "./" }]
+}

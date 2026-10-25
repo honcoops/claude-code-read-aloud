@@ -29,14 +29,39 @@ const SCRIPT = [
   "  $cur = ($cur + ' ' + $s).Trim()",
   '}',
   'if ($cur.Length -gt 0) { $chunks.Add($cur) }',
+  '$from = 0',
+  "if ($env:READ_ALOUD_ENGINE -eq 'server') {",
+  '  Add-Type -AssemblyName System.Net.Http',
+  '  $client = New-Object System.Net.Http.HttpClient',
+  '  $client.Timeout = [TimeSpan]::FromSeconds(30)',
+  '  $scale = [double]::Parse($env:READ_ALOUD_LENGTH, [Globalization.CultureInfo]::InvariantCulture)',
+  "  $url = 'http://127.0.0.1:' + $env:READ_ALOUD_PORT + '/synthesize'",
+  '  function Ask($i) {',
+  '    $json = @{ text = $chunks[$i]; voice = $env:READ_ALOUD_VOICE; length_scale = $scale } | ConvertTo-Json -Compress',
+  "    $client.PostAsync($url, (New-Object System.Net.Http.StringContent($json, [Text.Encoding]::UTF8, 'application/json')))",
+  '  }',
+  '  $idx = 0',
+  '  try {',
+  '    if ($chunks.Count -gt 0) { $task = Ask 0 }',
+  '    for ($idx = 0; $idx -lt $chunks.Count; $idx++) {',
+  '      $reply = $task.GetAwaiter().GetResult()',
+  '      [void]$reply.EnsureSuccessStatusCode()',
+  '      [IO.File]::WriteAllBytes("$tmp\\$idx.wav", $reply.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult())',
+  '      $task = $null',
+  '      if ($idx + 1 -lt $chunks.Count) { $task = Ask ($idx + 1) }',
+  '      (New-Object System.Media.SoundPlayer "$tmp\\$idx.wav").PlaySync()',
+  '    }',
+  '    $from = $chunks.Count',
+  '  } catch { $from = $idx }',
+  '}',
   'function Synth($i) {',
   '  $in = "$tmp\\$i.txt"',
   '  [IO.File]::WriteAllText($in, $chunks[$i], (New-Object Text.UTF8Encoding $false))',
   '  Start-Process $exe -ArgumentList @(\'-m\', \'piper\', \'-m\', "`"$model`"", \'--length-scale\', $env:READ_ALOUD_LENGTH, \'-f\', "`"$tmp\\$i.wav`"") -RedirectStandardInput $in -RedirectStandardError "$tmp\\$i.err" -WindowStyle Hidden -PassThru',
   '}',
   'try {',
-  '  if ($chunks.Count -gt 0) { $p = Synth 0 }',
-  '  for ($i = 0; $i -lt $chunks.Count; $i++) {',
+  '  if ($from -lt $chunks.Count) { $p = Synth $from }',
+  '  for ($i = $from; $i -lt $chunks.Count; $i++) {',
   '    $p.WaitForExit()',
   '    $next = $null',
   '    if ($i + 1 -lt $chunks.Count) { $next = Synth ($i + 1) }',
@@ -53,6 +78,10 @@ const RATE_KEY = 'rate'
 const DEFAULT_VOICE = 'en_US-mike-medium'
 const VOICE_KEY = 'voice'
 const LAST_KEY = 'last'
+// 'server' keeps one Piper HTTP server loaded; 'process' starts Piper per chunk.
+const ENGINE_KEY = 'engine'
+const DEFAULT_ENGINE = 'server'
+const SERVER_PORT = 59125
 
 const clampRate = (n: number): number => Math.max(-10, Math.min(10, Math.round(n)))
 // Piper stretches time by length_scale: below 1 is faster.
@@ -74,6 +103,7 @@ const clean = (md: string): string =>
     .replace(/^\s{0,3}#{1,6}\s*/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\|?[-:| ]+\|?\s*$/gm, '')
+    .replace(/[─-▟]+/g, ' ')
     .replace(/[*_~>|]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -97,6 +127,11 @@ async function readRate($: Engine): Promise<number> {
 async function readVoice($: Engine): Promise<string> {
   const stored = await $.store.get(VOICE_KEY)
   return typeof stored === 'string' && /^[\w.-]+$/.test(stored) ? stored : DEFAULT_VOICE
+}
+
+async function readEngine($: Engine): Promise<'server' | 'process'> {
+  const stored = await $.store.get(ENGINE_KEY)
+  return stored === 'process' || stored === 'server' ? stored : DEFAULT_ENGINE
 }
 
 // What to say when a dialog needs the person: tools that ask rather than
@@ -124,6 +159,8 @@ async function speak($: Engine, text: string): Promise<void> {
     READ_ALOUD_VOICE: await readVoice($),
     READ_ALOUD_LENGTH: lengthScale(rate),
     READ_ALOUD_RATE: String(rate),
+    READ_ALOUD_ENGINE: await readEngine($),
+    READ_ALOUD_PORT: String(SERVER_PORT),
   }
   const iterator = $.process
     .spawn({ argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', SCRIPT], input: text, env })
@@ -144,13 +181,51 @@ async function speak($: Engine, text: string): Promise<void> {
   })()
 }
 
+let stopServer: (() => void) | undefined
+
+// Keeps one Piper HTTP server loaded for the session so each chunk skips the
+// start-up cost. It listens on 127.0.0.1 only. When it cannot run (no Piper,
+// the port taken), the speech script falls back to one process per chunk.
+async function startServer($: Engine): Promise<void> {
+  if (stopServer !== undefined || (await readEngine($)) !== 'server') return
+  const resolved = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Write-Output ${PIPER_DIR_PS}`])
+  const root = resolved.stdout.trim()
+  if (!root) return
+  const voice = await readVoice($)
+  const iterator = $.process
+    .spawn({
+      argv: [
+        `${root}\\venv\\Scripts\\python.exe`, '-m', 'piper.http_server',
+        '--host', '127.0.0.1', '--port', String(SERVER_PORT),
+        '-m', `${root}\\voices\\${voice}.onnx`, '--data-dir', `${root}\\voices`,
+      ],
+    })
+    [Symbol.asyncIterator]()
+  const stop = () => {
+    void iterator.return?.(undefined as never)
+    if (stopServer === stop) stopServer = undefined
+  }
+  stopServer = stop
+  void (async () => {
+    try {
+      while (!(await iterator.next()).done) {}
+    } catch {
+      // the per-chunk path speaks instead
+    } finally {
+      if (stopServer === stop) stopServer = undefined
+    }
+  })()
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'speak',
-      description: 'Toggle reading answers aloud; "stop", "replay", "selected", "rate <-10..10>", "voice [name]"',
+      description: 'Toggle reading answers aloud; "stop", "replay", "selected", "rate <-10..10>", "voice [name]", "engine server|process"',
     })
-    return next(e)
+    const started = await next(e)
+    void startServer($)
+    return started
   })
 
   on('command.run', { command: 'speak' }, async ($, e) => {
@@ -177,6 +252,15 @@ export const register: Register = on => {
       if (!voices.includes(name)) return { text: `No voice "${name}". Installed: ${voices.join(', ') || 'none'}.` }
       await $.store.set(VOICE_KEY, name)
       return { text: `Voice set to ${name}.` }
+    }
+    if (args.startsWith('engine')) {
+      const name = args.slice(6).trim()
+      if (name === '') return { text: `Engine is ${await readEngine($)}. Use /speak engine server or /speak engine process.` }
+      if (name !== 'server' && name !== 'process') return { text: 'Usage: /speak engine server|process' }
+      await $.store.set(ENGINE_KEY, name)
+      if (name === 'server') await startServer($)
+      else stopServer?.()
+      return { text: `Engine set to ${name}.` }
     }
     if (args === 'selected') {
       const selection = await $.ui.selection()
@@ -228,6 +312,7 @@ export const register: Register = on => {
 
   on('session.end', async (_$, e, next) => {
     stopSpeech?.()
+    stopServer?.()
     return next(e)
   })
 }

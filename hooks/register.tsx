@@ -10,6 +10,10 @@ const PIPER_DIR_PS = "$(if ($env:READ_ALOUD_PIPER_DIR) { $env:READ_ALOUD_PIPER_D
 const SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '$text = [Console]::In.ReadToEnd()',
+  // One voice at a time across every session; a killed holder abandons the lock to the next in line.
+  "$gate = New-Object System.Threading.Mutex($false, 'ClaudeCodeReadAloud')",
+  'try { $isMine = $gate.WaitOne(120000) } catch { $isMine = ($_.Exception.InnerException -is [System.Threading.AbandonedMutexException]) }',
+  'if (-not $isMine) { exit }',
   '$root = ' + PIPER_DIR_PS,
   "$exe = Join-Path $root 'venv\\Scripts\\python.exe'",
   "$model = Join-Path $root ('voices\\' + $env:READ_ALOUD_VOICE + '.onnx')",
@@ -18,6 +22,7 @@ const SCRIPT = [
   '  $v = New-Object System.Speech.Synthesis.SpeechSynthesizer',
   '  $v.Rate = [int]$env:READ_ALOUD_RATE',
   '  $v.Speak($text)',
+  '  $gate.ReleaseMutex()',
   '  exit',
   '}',
   "$tmp = Join-Path $env:TEMP ('read-aloud-' + $PID)",
@@ -68,7 +73,7 @@ const SCRIPT = [
   '    (New-Object System.Media.SoundPlayer "$tmp\\$i.wav").PlaySync()',
   '    $p = $next',
   '  }',
-  '} finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }',
+  '} finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue; $gate.ReleaseMutex() }',
 ].join('\n')
 
 const MAX_CHARS = 3000

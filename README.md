@@ -22,19 +22,21 @@ Answer `y` to add the marketplace, then pick a scope. The mod is active right aw
 
 ## Better voices (optional)
 
-Out of the box you get the built-in Windows voice. For a more natural one, install Piper and a voice model once. In PowerShell:
+Out of the box you get the built-in Windows voice. For a more natural one, install Piper (needs Python 3) and the default voice, `en_US-mike-medium`, once. In PowerShell:
 
 ```powershell
 $root = "$env:USERPROFILE\.claude\read-aloud-piper"
 New-Item -ItemType Directory -Force "$root\voices" | Out-Null
-Invoke-WebRequest https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip -OutFile "$root\piper.zip"
-Expand-Archive "$root\piper.zip" $root -Force; Remove-Item "$root\piper.zip"
-$base = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
-Invoke-WebRequest "$base/en_US-lessac-medium.onnx" -OutFile "$root\voices\en_US-lessac-medium.onnx"
-Invoke-WebRequest "$base/en_US-lessac-medium.onnx.json" -OutFile "$root\voices\en_US-lessac-medium.onnx.json"
+python -m venv "$root\venv"
+& "$root\venv\Scripts\python.exe" -m pip install piper-tts
+$base = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/mike/medium"
+Invoke-WebRequest "$base/en_US-mike-medium.onnx" -OutFile "$root\voices\en_US-mike-medium.onnx"
+Invoke-WebRequest "$base/en_US-mike-medium.onnx.json" -OutFile "$root\voices\en_US-mike-medium.onnx.json"
 ```
 
-That downloads about 65 MB. More voices are at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices): put each `.onnx` and `.onnx.json` pair in the `voices` folder. To keep Piper somewhere else, set the `READ_ALOUD_PIPER_DIR` environment variable to that folder.
+That downloads about 65 MB for the voice, plus the Piper package. Expect a second or two between the end of an answer and the first words, while the voice loads.
+
+More voices are at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices): put each `.onnx` and `.onnx.json` pair in the `voices` folder, then pick one with `/speak voice <name>`. To keep everything somewhere else, set the `READ_ALOUD_PIPER_DIR` environment variable to that folder.
 
 ## Commands
 

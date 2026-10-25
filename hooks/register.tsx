@@ -1,8 +1,8 @@
 import type { Register } from 'claude-code'
 
-// Piper lives outside the mod so mod edits never touch the voices. Set
-// READ_ALOUD_PIPER_DIR to keep it elsewhere; without Piper the mod falls back
-// to the built-in Windows voice.
+// Piper (a Python venv) and its voices live outside the mod so mod edits never
+// touch them. Set READ_ALOUD_PIPER_DIR to keep them elsewhere; without Piper the
+// mod falls back to the built-in Windows voice.
 const PIPER_DIR_PS = "$(if ($env:READ_ALOUD_PIPER_DIR) { $env:READ_ALOUD_PIPER_DIR } else { Join-Path $env:USERPROFILE '.claude\\read-aloud-piper' })"
 
 // Reads the answer from stdin, speaks it chunk by chunk: the next chunk is
@@ -11,7 +11,7 @@ const SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '$text = [Console]::In.ReadToEnd()',
   '$root = ' + PIPER_DIR_PS,
-  "$exe = Join-Path $root 'piper\\piper.exe'",
+  "$exe = Join-Path $root 'venv\\Scripts\\python.exe'",
   "$model = Join-Path $root ('voices\\' + $env:READ_ALOUD_VOICE + '.onnx')",
   "if (-not ((Test-Path $exe) -and (Test-Path $model))) {",
   '  Add-Type -AssemblyName System.Speech',
@@ -32,7 +32,7 @@ const SCRIPT = [
   'function Synth($i) {',
   '  $in = "$tmp\\$i.txt"',
   '  [IO.File]::WriteAllText($in, $chunks[$i], (New-Object Text.UTF8Encoding $false))',
-  '  Start-Process $exe -ArgumentList @(\'--model\', "`"$model`"", \'--length_scale\', $env:READ_ALOUD_LENGTH, \'--output_file\', "`"$tmp\\$i.wav`"") -RedirectStandardInput $in -RedirectStandardError "$tmp\\$i.err" -WindowStyle Hidden -PassThru',
+  '  Start-Process $exe -ArgumentList @(\'-m\', \'piper\', \'-m\', "`"$model`"", \'--length-scale\', $env:READ_ALOUD_LENGTH, \'-f\', "`"$tmp\\$i.wav`"") -RedirectStandardInput $in -RedirectStandardError "$tmp\\$i.err" -WindowStyle Hidden -PassThru',
   '}',
   'try {',
   '  if ($chunks.Count -gt 0) { $p = Synth 0 }',
@@ -50,7 +50,7 @@ const MAX_CHARS = 3000
 // Speaking rate: -10 (slowest) to 10 (fastest), 0 is normal.
 const DEFAULT_RATE = 3
 const RATE_KEY = 'rate'
-const DEFAULT_VOICE = 'en_US-lessac-medium'
+const DEFAULT_VOICE = 'en_US-mike-medium'
 const VOICE_KEY = 'voice'
 const LAST_KEY = 'last'
 

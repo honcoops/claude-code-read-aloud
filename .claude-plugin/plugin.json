@@ -1,6 +1,6 @@
 {
   "name": "read-aloud",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reads Claude Code's answers, questions and permission prompts aloud on Windows, with local Piper neural voices or the built-in Windows voice.",
   "author": { "name": "honcoops" },
   "license": "MIT",

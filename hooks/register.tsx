@@ -109,9 +109,25 @@ const clean = (md: string): string =>
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\|?[-:| ]+\|?\s*$/gm, '')
     .replace(/[─-▟]+/g, ' ')
+    // Piper reads "..." and "…" as "circumflex"; a comma gives the same pause.
+    .replace(/\s*(?:\.{2,}|[‥…⋯︙])+\s*/g, ', ')
     .replace(/[*_~>|]/g, '')
+    // Typographic marks Piper mangles: straighten quotes, turn dashes into pauses,
+    // then drop any remaining symbol, emoji or exotic punctuation. Letters in any
+    // script and digits stay, so accented words still read correctly.
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”‟]/g, '"')
+    .replace(/\s*[–—―]\s*/g, ', ')
+    .replace(/[^\p{L}\p{N}\p{M}\s.,!?;:'"%$&@#+=\/\\()[\]{}-]/gu, ' ')
+    // Brackets get read out or dropped unpredictably; a comma gives the same pause.
+    .replace(/\s*[([{]\s*/g, ', ')
+    .replace(/\s*[)\]}]\s*/g, ', ')
+    .replace(/,(\s*,)+/g, ',')
+    .replace(/,\s*([.!?;:])/g, '$1')
+    .replace(/^,\s*/, '')
     .replace(/\s+/g, ' ')
     .trim()
+    .replace(/,$/, '')
 
 // Cut to the last sentence end inside the limit rather than mid-word.
 const truncate = (text: string): string => {
